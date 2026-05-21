@@ -1,9 +1,13 @@
-#!/usr/bin/env python3
 import os
 import re
 import sys
+import argparse
 import requests
 import anthropic
+
+__version__ = "0.1.0"
+
+DEFAULT_MODEL = "claude-sonnet-4-5"
 
 
 def _github_headers():
@@ -17,7 +21,7 @@ def _github_headers():
 def parse_repo(url):
     match = re.search(r"github\.com/([^/]+)/([^/\s]+?)(?:\.git)?(?:/.*)?$", url.strip())
     if not match:
-        sys.exit(f"Could not parse GitHub URL: {url}")
+        sys.exit(f"Error: could not parse GitHub URL: {url}")
     return match.group(1), match.group(2)
 
 
@@ -32,10 +36,10 @@ def fetch_readme(owner, repo):
     return r.text[:3000]
 
 
-def fetch_commits(owner, repo):
+def fetch_commits(owner, repo, count):
     r = requests.get(
         f"https://api.github.com/repos/{owner}/{repo}/commits",
-        params={"per_page": 10},
+        params={"per_page": count},
         headers=_github_headers(),
     )
     r.raise_for_status()
@@ -45,10 +49,10 @@ def fetch_commits(owner, repo):
     )
 
 
-def summarize(owner, repo, readme, commits):
+def summarize(owner, repo, readme, commits, model):
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-sonnet-4-5",
+        model=model,
         max_tokens=300,
         messages=[
             {
@@ -67,14 +71,42 @@ def summarize(owner, repo, readme, commits):
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("Usage: repobrief <github-repo-url>")
-    url = sys.argv[1]
-    owner, repo = parse_repo(url)
+    parser = argparse.ArgumentParser(
+        prog="repobrief",
+        description="Understand any GitHub repo in 10 seconds.",
+        epilog=(
+            "Environment variables:\n"
+            "  ANTHROPIC_API_KEY  (required) your Anthropic API key\n"
+            "  GITHUB_TOKEN       (optional) raises GitHub rate limit from 60 to 5000 req/hr"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("url", help="GitHub repository URL")
+    parser.add_argument(
+        "--commits",
+        type=int,
+        default=10,
+        metavar="N",
+        help="number of recent commits to include (default: 10)",
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        metavar="MODEL",
+        help=f"Claude model to use (default: {DEFAULT_MODEL})",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+
+    args = parser.parse_args()
+
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        sys.exit("Error: ANTHROPIC_API_KEY environment variable is not set.")
+
+    owner, repo = parse_repo(args.url)
     print(f"Fetching {owner}/{repo}...", file=sys.stderr)
     readme = fetch_readme(owner, repo)
-    commits = fetch_commits(owner, repo)
-    print(summarize(owner, repo, readme, commits))
+    commits = fetch_commits(owner, repo, args.commits)
+    print(summarize(owner, repo, readme, commits, args.model))
 
 
 if __name__ == "__main__":
