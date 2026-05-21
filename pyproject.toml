@@ -1,0 +1,13 @@
+[project]
+name = "repobrief"
+version = "0.1.0"
+description = "Understand any GitHub repo in 10 seconds — fetches README and recent commits, returns a plain-English summary via Claude."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.103.1",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+repobrief = "gitpulse:main"

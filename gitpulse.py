@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
+import os
 import re
 import sys
 import requests
 import anthropic
+
+
+def _github_headers():
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def parse_repo(url):
@@ -15,7 +24,7 @@ def parse_repo(url):
 def fetch_readme(owner, repo):
     r = requests.get(
         f"https://api.github.com/repos/{owner}/{repo}/readme",
-        headers={"Accept": "application/vnd.github.raw"},
+        headers={**_github_headers(), "Accept": "application/vnd.github.raw"},
     )
     if r.status_code == 404:
         return "(no README)"
@@ -27,6 +36,7 @@ def fetch_commits(owner, repo):
     r = requests.get(
         f"https://api.github.com/repos/{owner}/{repo}/commits",
         params={"per_page": 10},
+        headers=_github_headers(),
     )
     r.raise_for_status()
     return "\n".join(
@@ -38,7 +48,7 @@ def fetch_commits(owner, repo):
 def summarize(owner, repo, readme, commits):
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-4-5",
         max_tokens=300,
         messages=[
             {
@@ -58,8 +68,10 @@ def summarize(owner, repo, readme, commits):
 
 def main():
     if len(sys.argv) != 2:
-        sys.exit("Usage: python gitpulse.py <github-repo-url>")
-    owner, repo = parse_repo(sys.argv[1])
+        sys.exit("Usage: repobrief <github-repo-url>")
+    url = sys.argv[1]
+    owner, repo = parse_repo(url)
+    print(f"Fetching {owner}/{repo}...", file=sys.stderr)
     readme = fetch_readme(owner, repo)
     commits = fetch_commits(owner, repo)
     print(summarize(owner, repo, readme, commits))
