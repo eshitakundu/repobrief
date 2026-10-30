@@ -1,113 +1,48 @@
-import os
-import re
-import sys
+"""repobrief: understand any GitHub repo in seconds."""
+from __future__ import annotations
+
 import argparse
-import requests
-import anthropic
+import sys
 
-__version__ = "0.1.0"
-
-DEFAULT_MODEL = "claude-sonnet-4-5"
-
-
-def _github_headers():
-    headers = {"Accept": "application/vnd.github+json"}
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+from . import __version__
+from .brief import DEFAULT_MODEL, make_brief
+from .github import BriefError, GitHub, parse_repo
 
 
-def parse_repo(url):
-    match = re.search(r"github\.com/([^/]+)/([^/\s]+?)(?:\.git)?(?:/.*)?$", url.strip())
-    if not match:
-        sys.exit(f"Error: could not parse GitHub URL: {url}")
-    return match.group(1), match.group(2)
-
-
-def fetch_readme(owner, repo):
-    r = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/readme",
-        headers={**_github_headers(), "Accept": "application/vnd.github.raw"},
-    )
-    if r.status_code == 404:
-        return "(no README)"
-    r.raise_for_status()
-    return r.text[:3000]
-
-
-def fetch_commits(owner, repo, count):
-    r = requests.get(
-        f"https://api.github.com/repos/{owner}/{repo}/commits",
-        params={"per_page": count},
-        headers=_github_headers(),
-    )
-    r.raise_for_status()
-    return "\n".join(
-        f"- {c['commit']['message'].splitlines()[0]} ({c['commit']['author']['date'][:10]})"
-        for c in r.json()
-    )
-
-
-def summarize(owner, repo, readme, commits, model):
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=model,
-        max_tokens=300,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Repository: {owner}/{repo}\n\n"
-                    f"README (truncated):\n{readme}\n\n"
-                    f"Recent commits:\n{commits}\n\n"
-                    "Write one paragraph in plain English summarizing what this project does "
-                    "and what has changed recently."
-                ),
-            }
-        ],
-    )
-    return response.content[0].text
-
-
-def main():
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="repobrief",
-        description="Understand any GitHub repo in 10 seconds.",
+        description="Understand any GitHub repo in seconds.",
         epilog=(
             "Environment variables:\n"
-            "  ANTHROPIC_API_KEY  (required) your Anthropic API key\n"
-            "  GITHUB_TOKEN       (optional) raises GitHub rate limit from 60 to 5000 req/hr"
+            "  OPENROUTER_API_KEY  (optional) free key from openrouter.ai for a written summary;\n"
+            "                      without it you get a facts-only brief\n"
+            "  REPOBRIEF_MODEL     (optional) OpenRouter model id, default " + DEFAULT_MODEL + "\n"
+            "  GITHUB_TOKEN        (optional) raises GitHub's limit from 60 to 5,000 requests/hour"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("url", help="GitHub repository URL")
-    parser.add_argument(
-        "--commits",
-        type=int,
-        default=10,
-        metavar="N",
-        help="number of recent commits to include (default: 10)",
-    )
-    parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL,
-        metavar="MODEL",
-        help=f"Claude model to use (default: {DEFAULT_MODEL})",
-    )
+    parser.add_argument("repo", help="GitHub URL or owner/repo")
+    parser.add_argument("--commits", type=int, default=10, metavar="N",
+                        help="recent commits to read (1-100, default 10)")
+    parser.add_argument("--offline", action="store_true", help="skip the model, facts only")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    args = parser.parse_args(argv)
 
-    args = parser.parse_args()
-
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        sys.exit("Error: ANTHROPIC_API_KEY environment variable is not set.")
-
-    owner, repo = parse_repo(args.url)
-    print(f"Fetching {owner}/{repo}...", file=sys.stderr)
-    readme = fetch_readme(owner, repo)
-    commits = fetch_commits(owner, repo, args.commits)
-    print(summarize(owner, repo, readme, commits, args.model))
+    try:
+        owner, repo = parse_repo(args.repo)
+        print(f"Fetching {owner}/{repo}...", file=sys.stderr)
+        data = GitHub().fetch(owner, repo, commits=max(1, min(args.commits, 100)))
+    except BriefError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    brief, source = make_brief(data, api_key="" if args.offline else None)
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(brief)
+    if source == "offline" and not args.offline:
+        print("\n(Facts-only brief. Set OPENROUTER_API_KEY for a written summary.)", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
